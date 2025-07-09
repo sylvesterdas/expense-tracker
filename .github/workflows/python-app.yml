@@ -1,39 +1,78 @@
-# This workflow will install Python dependencies, run tests and lint with a single version of Python
-# For more information see: https://docs.github.com/en/actions/automating-builds-and-tests/building-and-testing-python
-
-name: Python application
+name: Create GitHub Release
 
 on:
   push:
-    branches: [ "main" ]
-  pull_request:
-    branches: [ "main" ]
+    tags:
+      - 'v*'
 
 permissions:
-  contents: read
+  contents: write
 
 jobs:
-  build:
-
+  build_and_release:
     runs-on: ubuntu-latest
 
     steps:
     - uses: actions/checkout@v4
+      with:
+        fetch-depth: 0 # Fetch all history for git log to work correctly
+
     - name: Set up Python 3.10
       uses: actions/setup-python@v3
       with:
         python-version: "3.10"
+
     - name: Install dependencies
       run: |
         python -m pip install --upgrade pip
         pip install -e .
         pip install pyinstaller
-    - name: Create executable
+
+    - name: Create Linux executable
       run: |
-        pyinstaller src/expense_tracker/main.py --name expense-tracker --onefile
-    - name: Upload executable as artifact
-      uses: actions/upload-artifact@v4
+        mkdir -p dist/
+        pyinstaller src/expense_tracker/main.py --name expense-tracker-linux --onefile
+
+    - name: Get previous tag
+      id: get_previous_tag
+      run: |
+        CURRENT_TAG=${{ github.ref_name }}
+        # Get the previous tag, if it exists. Suppress errors if no previous tag.
+        LAST_TAG=$(git describe --tags --abbrev=0 ${CURRENT_TAG}^ 2>/dev/null || echo "")
+        echo "CURRENT_TAG=$CURRENT_TAG" >> $GITHUB_OUTPUT
+        echo "LAST_TAG=$LAST_TAG" >> $GITHUB_OUTPUT
+
+    - name: Generate Release Notes
+      id: generate_release_notes
+      run: |
+        CURRENT_TAG="${{ steps.get_previous_tag.outputs.CURRENT_TAG }}"
+        LAST_TAG="${{ steps.get_previous_tag.outputs.LAST_TAG }}"
+        
+        RELEASE_NOTES_HEADER="# Expense Tracker Release Notes\n\n"
+        
+        if [ -z "$LAST_TAG" ]; then
+          # For the very first release, get all commit messages
+          CHANGELOG=$(git log --pretty=format:"* %s" | grep -v "Merge pull request" | grep -v "Merge branch")
+          RELEASE_NOTES="${RELEASE_NOTES_HEADER}Initial Release!\n\n${CHANGELOG}"
+        else
+          # Get commit messages between the last tag and the current tag
+          CHANGELOG=$(git log --pretty=format:"* %s" ${LAST_TAG}..${CURRENT_TAG} | grep -v "Merge pull request" | grep -v "Merge branch")
+          RELEASE_NOTES="${RELEASE_NOTES_HEADER}Changes since ${LAST_TAG}:\n\n${CHANGELOG}"
+        fi
+        
+        # Set the generated notes as an output to be used by the next step
+        echo "release_notes<<EOF" >> $GITHUB_OUTPUT
+        echo "$RELEASE_NOTES" >> $GITHUB_OUTPUT
+        echo "EOF" >> $GITHUB_OUTPUT
+
+    - name: Create Release
+      uses: softprops/action-gh-release@v2
+      if: startsWith(github.ref, 'refs/tags/')
       with:
-        name: expense-tracker-linux-executable
-        path: dist/
-    
+        files: |
+          dist/*
+        name: Release ${{ github.ref_name }}
+        tag_name: ${{ github.ref_name }}
+        body: ${{ steps.generate_release_notes.outputs.release_notes }}
+        draft: false
+        prerelease: false

@@ -1,6 +1,6 @@
-from log import printInfo, printSuccess, printError, printWarn
+from expense_tracker.log import printInfo, printSuccess, printError, printWarn
 from time import sleep
-from data import data
+from expense import data
 
 def add ():
   amount = input("Enter amount: ")
